@@ -20,10 +20,15 @@ Renderer::Renderer()
 	CreateHitgroupPrograms();
 
 	CreatePipeline();
+
+	SceneCamera = std::make_shared<Camera>();
+	DynamicElements.push_back(SceneCamera);
 }
 
 Renderer::~Renderer()
 {
+	optixDenoiserDestroy(Denoiser);
+
 	optixPipelineDestroy(Pipeline);
 
 	for (OptixProgramGroup pg : HitgroupProgramGroups)
@@ -77,7 +82,7 @@ void Renderer::Init()
 
 void Renderer::Tick(const float& deltaTime_seconds)
 {
-	SceneCamera.Tick(deltaTime_seconds);
+	SceneCamera->Tick(deltaTime_seconds);
 
 	for (std::shared_ptr<Model> model : ModelList)
 	{
@@ -98,16 +103,21 @@ void Renderer::Render()
 		return;
 	}
 
-	assert(IsInitialized &&"Init has not been called. You should do this before rendering!");
+	assert(IsInitialized && "Init has not been called. You should do this before rendering!");
 
 	// update the camera values
-	Params.Camera = SceneCamera.GetOptixCamera();
+	Params.Camera = SceneCamera->GetOptixCamera();
 
 	// update light values
 	std::shared_ptr<LightOptix> l = LightList[0]->GetOptixLight();
 	Params.Light = *((QuadLightOptix*)l.get());
 
 	// upload the launch params and increment frame ID
+	if (!AccumulatedDenoiseImages || HasSceneChanged())
+	{
+		// prevent accumulation if disabled by "going back" to first frame
+		Params.FrameID = 0;
+	}
 	ParamsBuffer.Upload(&Params, 1);
 	Params.FrameID++;
 
@@ -124,6 +134,62 @@ void Renderer::Render()
 		throw std::runtime_error("Could not execute optixLaunch!");
 	}
 
+	// framebuffer is written to, now denoise and write to denoised image buffer
+	// this can be done before cuda synch (-> asynch with regards to the new image rendering)
+	OptixDenoiserParams denoiserParams;
+	denoiserParams.hdrIntensity = (CUdeviceptr)0;
+	if (AccumulatedDenoiseImages)
+	{
+		denoiserParams.blendFactor = 1.f / Params.FrameID;
+	}
+	else
+	{
+		denoiserParams.blendFactor = 0.f;
+	}
+
+	OptixImage2D inputLayer;
+	inputLayer.data = ColorBuffer.CudaPtr();
+	inputLayer.width = Params.FramebufferSize.x;
+	inputLayer.height = Params.FramebufferSize.y;
+	inputLayer.rowStrideInBytes = Params.FramebufferSize.x * sizeof(float4);
+	inputLayer.pixelStrideInBytes = sizeof(float4);
+	inputLayer.format = OPTIX_PIXEL_FORMAT_FLOAT4;
+
+	OptixImage2D outputLayer;
+	outputLayer.data = DenoisedBuffer.CudaPtr();
+	outputLayer.width = Params.FramebufferSize.x;
+	outputLayer.height = Params.FramebufferSize.y;
+	outputLayer.rowStrideInBytes = Params.FramebufferSize.x * sizeof(float4);
+	outputLayer.pixelStrideInBytes = sizeof(float4);
+	outputLayer.format = OPTIX_PIXEL_FORMAT_FLOAT4;
+
+	if (DenoiserEnabled)
+	{
+		result = optixDenoiserInvoke(Denoiser,
+			0, //stream
+			&denoiserParams,
+			DenoiserState.CudaPtr(),
+			DenoiserState.Size_bytes,
+			&inputLayer, 1,
+			0, // input offset x
+			0, // input offset y
+			&outputLayer,
+			DenoiserScratch.CudaPtr(),
+			DenoiserScratch.Size_bytes
+		);
+
+		if (result != OPTIX_SUCCESS)
+		{
+			throw std::runtime_error("OptiX Denoiser invocation failed!");
+		}
+	}
+	else
+	{
+		cudaMemcpy((void*)outputLayer.data, (void*)inputLayer.data,
+			outputLayer.width * outputLayer.height * sizeof(float4),
+			cudaMemcpyDeviceToDevice);
+	}
+
 	// make sure the frame is rendered before it is downloaded (only for this easy example!")
 	SynchCuda("Error synchronizing CUDA after rendering!");
 }
@@ -134,29 +200,86 @@ void Renderer::Resize(const vec2i& size)
 	{
 		return;
 	}
+
+	if (Denoiser)
+	{
+		OptixResult result = optixDenoiserDestroy(Denoiser);
+
+		if (result != OPTIX_SUCCESS)
+		{
+			throw std::runtime_error("Could not destroy OptiX denoiser!");
+		}
+	}
+
+
+
+	//(re-)create the denoiser
+	OptixDenoiserOptions denoiserOptions = {};
+	denoiserOptions.inputKind = OPTIX_DENOISER_INPUT_RGB;
+
+	OptixResult result = optixDenoiserCreate(OptixContext, &denoiserOptions, &Denoiser);
+	if (result != OPTIX_SUCCESS)
+	{
+		throw std::runtime_error("Could not create OptiX denoiser!");
+	}
+
+	result = optixDenoiserSetModel(Denoiser, OPTIX_DENOISER_MODEL_KIND_LDR, nullptr, 0);
+	if (result != OPTIX_SUCCESS)
+	{
+		throw std::runtime_error("Could not set OptiX denoiser model!");
+	}
+
+	OptixDenoiserSizes denoiserReturnSizes;
+	result = optixDenoiserComputeMemoryResources(Denoiser, size.x, size.y, &denoiserReturnSizes);
+	if (result != OPTIX_SUCCESS)
+	{
+		throw std::runtime_error("Could not compute memory resource sizes for OptiX denoiser");
+	}
+
+	DenoiserScratch.Resize(
+		std::max(
+			denoiserReturnSizes.withOverlapScratchSizeInBytes,
+			denoiserReturnSizes.withoutOverlapScratchSizeInBytes
+		));
+	DenoiserState.Resize(denoiserReturnSizes.stateSizeInBytes);
+
+	// resize the CUDA framebuffer and denoised buffer
+	const size_t bufferSize = size.x * size.y * sizeof(float4);
 	Params.FramebufferSize = size;
-	ColorBuffer.Resize(size.x * size.y * sizeof(uint32_t));
-	Params.FramebufferData = reinterpret_cast<uint32_t*>(ColorBuffer.CudaPtr());
-	SceneCamera.SetFramebufferSize(size);
+	ColorBuffer.Resize(bufferSize);
+	Params.FramebufferData = reinterpret_cast<float4*>(ColorBuffer.CudaPtr());
+	SceneCamera->SetFramebufferSize(size);
+	DenoisedBuffer.Resize(bufferSize);
+
+	// finally setup the denoiser
+	result = optixDenoiserSetup(Denoiser, 0,
+		size.x, size.y,
+		DenoiserState.CudaPtr(),
+		DenoiserState.Size_bytes,
+		DenoiserScratch.CudaPtr(),
+		DenoiserScratch.Size_bytes);
+
 }
 
-void Renderer::DownloadPixels(uint32_t pixels[])
+void Renderer::DownloadPixels(vec4f pixels[])
 {
-	ColorBuffer.Download(pixels, Params.FramebufferSize.x * Params.FramebufferSize.y);
+	DenoisedBuffer.Download(pixels, Params.FramebufferSize.x * Params.FramebufferSize.y);
 }
 
 Camera* Renderer::GetCameraPtr()
 {
-	return &SceneCamera;
+	return SceneCamera.get();
 }
 
 void Renderer::InitializeCamera(const vec3f& eye, const vec3f& at, const vec3f& up)
 {
-	SceneCamera.SetEye(eye);
-	SceneCamera.SetAt(at);
-	SceneCamera.SetUp(up);
+	SceneCamera->SetEye(eye);
+	SceneCamera->SetAt(at);
+	SceneCamera->SetUp(up);
 
-	SceneCamera.UpdateInitialEyeAtUp();
+	SceneCamera->UpdateInitialEyeAtUp();
+
+	Params.FrameID = 0;
 }
 
 void Renderer::AddMesh(std::shared_ptr<Mesh> mesh)
@@ -173,6 +296,66 @@ void Renderer::AddLight(std::shared_ptr<Light> light)
 {
 	assert(LightList.size() == 0 && "Currently only one light source is supported!");
 	LightList.push_back(light);
+
+	if (light->IsDynamic())
+	{
+		DynamicElements.push_back(light);
+	}
+}
+
+bool Renderer::GetDynamicLightsMovementsEnabled() const
+{
+	return DynamicLightsMovementsEnabled;
+}
+
+void Renderer::EnableDynamicLightsMovements(const bool& enabled)
+{
+	DynamicLightsMovementsEnabled = enabled;
+
+	for (std::shared_ptr<Light> l : LightList)
+	{
+		IDynamicElement* dyn = dynamic_cast<IDynamicElement*>(l.get());
+		if (dyn)
+		{
+			dyn->SetDynamicEnabled(enabled);
+		}
+	}
+}
+
+void Renderer::ToggleDynamicLightsMovement()
+{
+	DynamicLightsMovementsEnabled = !DynamicLightsMovementsEnabled;
+	EnableDynamicLightsMovements(DynamicLightsMovementsEnabled);
+}
+
+bool Renderer::GetDenoiserEnabled() const
+{
+	return DenoiserEnabled;
+}
+
+void Renderer::SetDenoiserEnabled(const bool& enabled)
+{
+	DenoiserEnabled = enabled;
+}
+
+void Renderer::ToggleDenoiserEnabled()
+{
+	DenoiserEnabled = !DenoiserEnabled;
+}
+
+bool Renderer::GetAccumulationEnabled() const
+{
+	return AccumulatedDenoiseImages;
+}
+
+void Renderer::SetAccumulationEnabled(const bool& enabled)
+{
+	AccumulatedDenoiseImages = enabled;
+}
+
+void Renderer::ToggleAccumulationEnabled()
+{
+	AccumulatedDenoiseImages = !AccumulatedDenoiseImages;
 }
 
 void Renderer::InitOptix()
@@ -809,6 +992,19 @@ OptixTraversableHandle Renderer::BuildAccelerationStructure()
 	std::cout << "finished building acceleration structure" << std::endl;
 
 	return handle;
+}
+
+bool Renderer::HasSceneChanged() const
+{
+	for (std::shared_ptr<IDynamicElement> e : DynamicElements)
+	{
+		if (e->IsMarkedDirty())
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void Renderer::SynchCuda(const std::string& errorMsg /* = "" */)

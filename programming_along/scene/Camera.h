@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Entity.h"
+#include "IDynamicElement.h"
+
 #include "gdt/math/vec.h"
 
 #include "GLFW/glfw3.h"
@@ -22,8 +25,9 @@ struct CameraOptix
 /**
 * Full camera class to control the camera on the host
 */
-class Camera
+class Camera : public Entity, public IDynamicElement
 {
+	//TODO: override SetTransformationMatrix from Entity with Eye/At/Up setting
 public:
 	Camera(const vec3f& eye = vec3f(0.f, 0.f, 0.f), 
 		const vec3f& at = vec3f(0.f, 0.f, -1.f), 
@@ -62,6 +66,8 @@ public:
 	void MousUp(const int32_t& button);
 
 	CameraOptix GetOptixCamera() const;
+
+	virtual bool IsDynamic() const override;
 
 private:
 	vec3f Eye;

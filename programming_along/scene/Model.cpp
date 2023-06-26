@@ -12,12 +12,12 @@
 
 namespace fs = std::filesystem;
 
-Model::Model(std::shared_ptr<Mesh> mesh, const std::string& name /* = "model" */) : Name(name)
+Model::Model(std::shared_ptr<Mesh> mesh, const std::string& name /* = "model" */) : Entity(name)
 {
 	MeshList.push_back(mesh);
 }
 
-Model::Model(const std::string& meshFilePath, const std::string& name /* = "model" */) : Name(name)
+Model::Model(const std::string& meshFilePath, const std::string& name /* = "model" */) : Entity(name)
 {
 	AddMeshesFromFile(meshFilePath);
 }
@@ -228,14 +228,4 @@ void Model::AddMeshesFromFile(const std::string& filePath)
 std::shared_ptr<Mesh> Model::GetMeshAt(const size_t& index)
 {
 	return MeshList[index];
-}
-
-void Model::SetName(const std::string& name)
-{
-	Name = name;
-}
-
-std::string Model::GetName() const
-{
-	return Name;
 }

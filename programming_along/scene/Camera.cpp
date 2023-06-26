@@ -27,6 +27,8 @@ Camera::Camera(const vec3f& eye /* = vec3f(0.f, 0.f, 0.f)*/,
 
 	std::fill_n(KeyStatus, 256, 0);
 	std::fill_n(MouseStatus, 8, 0);
+
+	Name = "Camera";
 }
 
 Camera::~Camera()
@@ -36,6 +38,12 @@ Camera::~Camera()
 
 void Camera::Tick(const float& deltaTime_seconds)
 {
+	// we track movement per frame for the accumulation of frames
+	// -> if the camera has moved, the accumulation has to be reset
+	// it is more efficient, to reset the bit here, rather than query and
+	// reset the dirty bit of every dynamic element from the renderer
+	// seeing as we would only need changes that happend during the current frame
+	SetDirtyBitConsumed();
 	Move(deltaTime_seconds);
 }
 
@@ -45,6 +53,8 @@ void Camera::Move(const float& deltaTime_seconds)
 	vec3f right = cross(forward, Up);
 
 	vec3f lastEye = Eye;
+	vec3f lastAt = At;
+	vec3f lastUp = Up;
 
 	float adjustedSpeed = Speed;
 
@@ -56,26 +66,32 @@ void Camera::Move(const float& deltaTime_seconds)
 	if (KeyStatus[GLFW_KEY_A])
 	{
 		Eye -= adjustedSpeed * deltaTime_seconds * right;
+		At = Eye + forward;
 	}
 	if (KeyStatus[GLFW_KEY_D])
 	{
 		Eye += adjustedSpeed * deltaTime_seconds * right;
+		At = Eye + forward;
 	}
 	if (KeyStatus[GLFW_KEY_W])
 	{
 		Eye += adjustedSpeed * deltaTime_seconds * forward;
+		At = Eye + forward;
 	}
 	if (KeyStatus[GLFW_KEY_S])
 	{
 		Eye -= adjustedSpeed * deltaTime_seconds * forward;
+		At = Eye + forward;
 	}
 	if (KeyStatus[GLFW_KEY_E])
 	{
 		Eye += adjustedSpeed * deltaTime_seconds * Up;
+		At = Eye + forward;
 	}
 	if (KeyStatus[GLFW_KEY_Q])
 	{
 		Eye -= adjustedSpeed * deltaTime_seconds * Up;
+		At = Eye + forward;
 	}
 
 	// safety net
@@ -122,13 +138,13 @@ void Camera::Move(const float& deltaTime_seconds)
 
 		Quaternion3f quatY = Quaternion3f::rotate(right, angleY);
 		forward = quatY * forward;
+
+		At = Eye + forward;
 	}
 	if (KeyStatus[GLFW_KEY_0])
 	{
 		Eye = vec3f(0.f, 0.f, 0.f);
 	}
-	
-	At = Eye + forward;
 
 	// if setting to a certain position and orientation,
 	// ignore any forward calculations!
@@ -146,6 +162,11 @@ void Camera::Move(const float& deltaTime_seconds)
 	}
 
 	LastMousePos_Normalized = CurrentMousePos_Normalized;
+
+	if (lastEye != Eye || lastAt != At || lastUp != Up)
+	{
+		DirtyBit = true;
+	}
 }
 
 void Camera::SetFramebufferSize(const vec2i& fbSize)
@@ -243,4 +264,9 @@ CameraOptix Camera::GetOptixCamera() const
 	cam.Vertical = CosFovy * normalize(cross(cam.Horizontal, cam.LookingDirection));
 
 	return cam;
+}
+
+bool Camera::IsDynamic() const
+{
+	return true;
 }

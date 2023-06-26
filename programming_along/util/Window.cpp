@@ -77,9 +77,9 @@ void Window::Draw()
 
 	glBindTexture(GL_TEXTURE_2D, FramebufferTexture);
 	GLenum texFormat = GL_RGBA;
-	GLenum texType = GL_UNSIGNED_BYTE;
+	GLenum texelType = GL_FLOAT;
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, FramebufferSize.x, FramebufferSize.y, 0, 
-		GL_RGBA, GL_UNSIGNED_BYTE, Pixels.data());
+		GL_RGBA, texelType, Pixels.data());
 
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
@@ -187,8 +187,24 @@ void Window::OnKeyPressedOrReleased(GLFWwindow* window, int32_t key, int32_t san
 	Window* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
 	Camera* cam = win->OptixRenderer.GetCameraPtr();
 
+	// TODO: the window shouldn't really be doing any logic work, 
+	//		the renderer should be notified differently of setup changes
+
 	if (action == GLFW_PRESS)
 	{
+		if (key == GLFW_KEY_COMMA)
+		{
+			win->GetRenderer()->ToggleDenoiserEnabled();
+		}
+		else if (key == GLFW_KEY_PERIOD)
+		{
+			win->GetRenderer()->ToggleAccumulationEnabled();
+		}
+		else if (key == GLFW_KEY_MINUS)
+		{
+			win->GetRenderer()->ToggleDynamicLightsMovement();
+		}
+
 		cam->KeyDown(key);
 	}
 	else if(action == GLFW_RELEASE)

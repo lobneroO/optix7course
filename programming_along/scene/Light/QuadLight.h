@@ -23,9 +23,6 @@ public:
 	vec2f GetExtent() const;
 	void SetExtent(const vec2f& extent);
 
-	bool IsRotationEnabled() const;
-	void SetRotationEnabled(const bool& enabled);
-
 	float GetRotationSpeed() const;
 	void SetRotationSpeed(const float& speed);
 
@@ -34,10 +31,11 @@ public:
 
 	virtual std::shared_ptr<LightOptix> GetOptixLight() const override;
 
+	virtual bool IsDynamic() const override;
+
 protected:
 	vec2f Extent;
 
-	bool RotationEnabled = false;
 	float RotationSpeed = 1.f;
 	float RotationRadius = 1.f;
 	vec3f RotationOffset = vec3f(0);

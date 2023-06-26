@@ -6,13 +6,19 @@ RotatingLight::RotatingLight(const vec3f& location, float rotationSpeed /* = 1.f
 	Location = location;
 	RotationSpeed = rotationSpeed;
 	RotationRadius = rotationRadius;
+
+	Name = "RotatingLight";
 }
 
 void RotatingLight::Tick(const float& deltaTime_seconds)
 {
-	TotalTime_seconds += deltaTime_seconds;
-	RotationOffset.x = sin(TotalTime_seconds * RotationSpeed) * RotationRadius;
-	RotationOffset.z = cos(TotalTime_seconds * RotationSpeed) * RotationRadius;
+	if (DynamicEnabled)
+	{
+		TotalTime_seconds += deltaTime_seconds;
+		RotationOffset.x = sin(TotalTime_seconds * RotationSpeed) * RotationRadius;
+		RotationOffset.z = cos(TotalTime_seconds * RotationSpeed) * RotationRadius;
+		DirtyBit = true;
+	}
 }
 
 float RotatingLight::GetRotationSpeed() const
@@ -40,4 +46,9 @@ std::shared_ptr<LightOptix> RotatingLight::GetOptixLight() const
 	std::shared_ptr<LightOptix> l = this->GetOptixLight();
 	l->Location += RotationOffset;
 	return l;
+}
+
+bool RotatingLight::IsDynamic() const
+{
+	return true;
 }

@@ -14,6 +14,7 @@
 
 #include "LaunchParams.h"
 
+class IDynamicElement;
 class Model;
 struct Mesh;
 class Light;
@@ -48,7 +49,7 @@ public:
 	/**
 	* Download the rendered color buffer from the device into a host array
 	*/
-	void DownloadPixels(uint32_t pixels[]);
+	void DownloadPixels(vec4f pixels[]);
 
 	Camera* GetCameraPtr();
 
@@ -59,6 +60,18 @@ public:
 	void AddModel(std::shared_ptr<Model> model);
 
 	void AddLight(std::shared_ptr<Light> light);
+
+	bool GetDynamicLightsMovementsEnabled() const;
+	void EnableDynamicLightsMovements(const bool& enabled);
+	void ToggleDynamicLightsMovement();
+
+	bool GetDenoiserEnabled() const;
+	void SetDenoiserEnabled(const bool& enabled);
+	void ToggleDenoiserEnabled();
+
+	bool GetAccumulationEnabled() const;
+	void SetAccumulationEnabled(const bool& enabled);
+	void ToggleAccumulationEnabled();
 
 private:
 	/**
@@ -111,6 +124,12 @@ private:
 	*/
 	OptixTraversableHandle BuildAccelerationStructure();
 
+	/**
+	* Checks if any of the dynamic scene elements is marked as dirty.
+	* @returns true if any element is marked dirty, false otherwise
+	*/
+	bool HasSceneChanged() const;
+
 	void SynchCuda(const std::string& errorMsg = "");
 
 	uint32_t GetNumberMeshesFromScene(const bool& includeVisibleProxies = true) const;
@@ -159,14 +178,19 @@ protected:
 	CUDABuffer ParamsBuffer;
 	/** Framebuffer contents */
 	CUDABuffer ColorBuffer;
+	/** Denoised framebuffer contents */
+	CUDABuffer DenoisedBuffer;
 
 	/** Scene */
-	Camera SceneCamera;
+	std::shared_ptr<Camera> SceneCamera;
 
 	std::vector<std::shared_ptr<Model>> ModelList;
 	CUDABuffer AccelerationStructureBuffer;
 
+	bool DynamicLightsMovementsEnabled = true;
 	std::vector<std::shared_ptr<Light>> LightList;
+
+	std::vector<std::shared_ptr<IDynamicElement>> DynamicElements;
 
 	std::vector<CUDABuffer> VertexBufferList;
 	std::vector<CUDABuffer> NormalBufferList;
@@ -177,6 +201,8 @@ protected:
 	std::vector<cudaTextureObject_t> TextureObjects;
 
 	bool IsInitialized = false;
+	bool AccumulatedDenoiseImages = false;
+	bool DenoiserEnabled = true;
 
 private:
 	cudaStream_t CudaStream;
@@ -197,4 +223,10 @@ private:
 	CUDABuffer MissRecordsBuffer;
 	std::vector<OptixProgramGroup> HitgroupProgramGroups;
 	CUDABuffer HitgroupRecordsBuffer;
+
+	// OptixDenoiser is a OptixDenoiser_t* (i.e. a pointer type)
+	// therefore no need to make a (new) pointer out of it for the member
+	OptixDenoiser Denoiser = nullptr;
+	CUDABuffer DenoiserScratch;
+	CUDABuffer DenoiserState;
 };
